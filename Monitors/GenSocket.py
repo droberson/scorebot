@@ -1,16 +1,16 @@
 #!/usr/bin/env python2
-# requires:  https://pypi.python.org/pypi/http-parser
-from twisted.internet import reactor, protocol, ssl
-from twisted.internet.defer import Deferred
-from http_parser.pyparser import HttpParser
-from Parameters import Parameters
-from Jobs import Jobs
-import time
+
+"""GenSocket.py"""
+
 import sys
-import re
+import time
+
+from twisted.internet import reactor, protocol
+from twisted.internet.defer import Deferred
+
 
 class GenClient(protocol.Protocol):
-
+    """GenClient object"""
     def __init__(self, factory):
         self.factory = factory
         self.job_id = self.factory.get_job_id()
@@ -24,9 +24,11 @@ class GenClient(protocol.Protocol):
 
     def connectionMade(self):
         if self.job_id:
-            sys.stderr.write("Job %s: Made connection to %s:%s\n" % (self.job_id, self.factory.get_ip(), self.factory.get_port()))
+            sys.stderr.write("Job %s: Made connection to %s:%s\n" % \
+                (self.job_id, self.factory.get_ip(), self.factory.get_port()))
         else:
-            sys.stderr.write("Made connection to %s:%s\n" % (self.factory.get_ip(), self.factory.get_port()))
+            sys.stderr.write("Made connection to %s:%s\n" % \
+                (self.factory.get_ip(), self.factory.get_port()))
         reactor.callLater(self.factory.get_timeout(), self.TimedOut)
         #sys.stderr.write("Sending: %s\n" % self.request)
         if self.request:
@@ -87,9 +89,6 @@ class GenCoreFactory(protocol.ClientFactory):
     def get_timeout(self):
         return self.timeout
 
-    def get_conn_id(self):
-        return self.conn_id
-
     def get_ip(self):
         return self.ip
 
@@ -102,7 +101,8 @@ class GenCoreFactory(protocol.ClientFactory):
     def get_debug(self):
         return self.debug
 
-    def get_job_id(self):
+    @staticmethod
+    def get_job_id():
         return None
 
 class GenCheckFactory(GenCoreFactory):
@@ -129,11 +129,11 @@ class GenCheckFactory(GenCoreFactory):
     def clientConnectionFailed(self, connector, reason):
         self.end = time.time()
         if self.params.debug:
-            sys.stderr.write( "Job %s: clientConnectionFailed:\t" % self.job.get_job_id())
-            sys.stderr.write( "reason %s\t" % reason)
-            sys.stderr.write( "self.reason: %s\t" % self.reason)
+            sys.stderr.write("Job %s: clientConnectionFailed:\t" % self.job.get_job_id())
+            sys.stderr.write("reason %s\t" % reason)
+            sys.stderr.write("self.reason: %s\t" % self.reason)
             if self.debug:
-                sys.stderr.write( "\nReceived: %s\n" % self.get_server_headers())
+                sys.stderr.write("\nReceived: %s\n" % self.get_server_headers())
         conn_time = None
         if self.start:
             conn_time = self.end - self.start
@@ -146,11 +146,11 @@ class GenCheckFactory(GenCoreFactory):
     def clientConnectionLost(self, connector, reason):
         self.end = time.time()
         if self.params.debug:
-            sys.stderr.write( "Job %s: clientConnectionLost\t" % self.job.get_job_id())
-            sys.stderr.write( "given reason: %s\t" % reason)
-            sys.stderr.write( "self.reason: %s\t" % self.reason)
+            sys.stderr.write("Job %s: clientConnectionLost\t" % self.job.get_job_id())
+            sys.stderr.write("given reason: %s\t" % reason)
+            sys.stderr.write("self.reason: %s\t" % self.reason)
             if self.debug:
-                sys.stderr.write( "\nReceived: %s\n" % self.get_server_headers())
+                sys.stderr.write("\nReceived: %s\n" % self.get_server_headers())
         conn_time = self.end - self.start
         if self.data:
             self.service.set_data(self.data)
@@ -163,60 +163,4 @@ class GenCheckFactory(GenCoreFactory):
         else:
             self.service.pass_conn()
             self.deferreds[connector].callback(self.job.get_job_id())
-
-if __name__ == "__main__":
-    from twisted.python import log
-    from DNSclient import DNSclient
-    from WebClient import JobFactory
-    import sys
-
-    def post_job(job_id):
-        factory = JobFactory(params, jobs, "put", job_id)
-        reactor.connectTCP(params.get_sb_ip(), params.get_sb_port(), factory, params.get_timeout())
-
-    def check_web(result, params, job):
-        print "Got %s %s %s" % (result, params, job)
-        print "Checking services for %s" % job.get_ip()
-        for service in job.get_services():
-            factory = WebServiceCheckFactory(params, job, service)
-            deferred = factory.get_deferred()
-            deferred.addCallback(post_job)
-            reactor.connectTCP(job.get_ip(), service.get_port(), factory, params.get_timeout())
-
-    def dns_fail(failure, job):
-        jobid = job.get_job_id()
-        print "DNS Failed for job %s! %s" % (jobid, failure)
-        job.set_ip("fail")
-        raise Exception("Fail Host")
-
-    def job_fail(failure, job):
-        jobid = job.get_job_id()
-        print "job %s Failed! %s" % (jobid, failure)
-        print job.get_json_str()
-        post_job(jobid)
-        return True
-
-    def check_job(params, jobs):
-        job = jobs.get_job()
-        if job:
-            #DNS?
-            dnsobj = DNSclient(job, 3)
-            # Execute the query
-            query_d = dnsobj.query()
-            # Handle a DNS failure - fail the host
-            query_d.addErrback(dns_fail, job)
-            # Handle a DNS success - move on to ping
-            query_d.addCallback(check_web, params, job)
-            query_d.addErrback(job_fail, job)
-
-    log.startLogging(open('log/gensockettest.log', 'w'))
-    jobs = Jobs()
-    sys.stderr.write( "Testing %s\n" % sys.argv[0])
-    params = Parameters()
-    factory = JobFactory(params, jobs, "get")
-    reactor.connectTCP(params.get_sb_ip(), params.get_sb_port(), factory, params.get_timeout())
-    reactor.callLater(5, check_job, params, jobs)
-    reactor.callLater(30, reactor.stop)
-    reactor.run()
-    print "Finished normally"
 

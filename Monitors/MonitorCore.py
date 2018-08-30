@@ -1,19 +1,24 @@
 #!/usr/bin/env python2.7
-# requires:  https://pypi.python.org/pypi/http-parser
-from twisted.internet import reactor, protocol, ssl
-from http_parser.pyparser import HttpParser
+
+"""MonitorCore.py"""
+
+import os
+import time
+import sys
+import traceback
+
+from twisted.python import syslog
+from twisted.internet import reactor, ssl
+
+from Jobs import Jobs
+from Parameters import Parameters
 from WebClient import WebServiceCheckFactory, JobFactory
 from GenSocket import GenCheckFactory
 from DNSclient import DNSclient
 from Pingclient import PingProtocol
-from FTPclient import FTP_client
+from FTPclient import FTPclient
 from SMTPclient import SMTPFactory
-from twisted.python import syslog
-#from twisted.python import log
-import traceback
-import time
-import sys
-import os
+
 
 class MonitorCore(object):
 
@@ -47,9 +52,10 @@ class MonitorCore(object):
             # DNS
             try:
                 dnsobj = DNSclient(job)
-            except:
-                sys.stderr.write("Job %s: Failure starting job %s:\n" % (job_id, job.get_json_str()))
-                traceback.print_tb()
+            except Exception as exc:
+                sys.stderr.write("Job %s: Failure starting job %s:\n" % \
+                    (job_id, job.get_json_str()))
+                traceback.print_tb(exc)
             # Execute the query
             query_d = dnsobj.query()
             # Handle a DNS success - move on to ping
@@ -74,13 +80,16 @@ class MonitorCore(object):
 
     def post_job(self, job):
         factory = JobFactory(self.params, self.jobs, "put", job)
-        connector = reactor.connectTCP(self.params.get_sb_ip(), self.params.get_sb_port(), factory, \
-                           self.params.get_timeout())
+        connector = reactor.connectTCP(self.params.get_sb_ip(),
+                                       self.params.get_sb_port(),
+                                       factory,
+                                       self.params.get_timeout())
         deferred = factory.get_deferred(connector)
         deferred.addCallback(self.job_submit_pass, job)
         deferred.addErrback(self.job_submit_fail, job)
 
-    def proc_result(self, job, result):
+    @staticmethod
+    def proc_result(job, result):
         job_id = job.get_job_id()
         job_json = job.get_result_json_str()
         if len(result) > 300:
@@ -112,7 +121,7 @@ class MonitorCore(object):
     def dns_fail(self, failure, job, dnsobj):
         # Do this if the DNS check failed
         job_id = job.get_job_id()
-        sys.stderr.write("Job %s:  DNS failed. %s\n" % (job_id, failure))
+        sys.stderr.write("Job %s: DNS failed. %s\n" % (job_id, failure))
         job = self.jobs.finish_job(job_id, "DNS failed")
         job.set_ip("fail")
         self.post_job(job)
@@ -121,7 +130,7 @@ class MonitorCore(object):
 
     def dns_pass(self, result, job, dnsobj):
         jobid = job.get_job_id()
-        print "Job %s:  DNS passed: %s" % (jobid, result)
+        print "Job %s: DNS passed: %s" % (jobid, result)
         reactor.callLater(0.1, self.pinghost, job)
         dnsobj.close()
         del dnsobj
@@ -142,12 +151,13 @@ class MonitorCore(object):
     def ping_fail(self, failure, job, pingobj):
         jobid = job.get_job_id()
         sys.stderr.write("Job %s:  Ping failed. %s\n" % (jobid, failure))
-        job = self.jobs.finish_job(job_id, "Ping failed")
+        job = self.jobs.finish_job(jobid, "Ping failed")
         job.set_ip("fail")
         self.post_job(job)
         del pingobj
 
-    def ftp_fail(self, failure, service, job_id):
+    @staticmethod
+    def ftp_fail(failure, service, job_id):
         if "530 Login incorrect" in failure:
             sys.stderr.write("Job %s: Login failure\n" % job_id)
             service.fail_login()
@@ -167,7 +177,7 @@ class MonitorCore(object):
                     job.set_factory(factory)
                     factory.authenticate()
                 elif service.get_application() == "ftp":
-                    ftpobj = FTP_client(job, service, self.params, self.ftp_fail)
+                    ftpobj = FTPclient(job, service, self.params, self.ftp_fail)
                     ftpobj.run()
                 elif service.get_application() == "smtp":
                     factory = SMTPFactory(self.params, job, service)
@@ -175,47 +185,49 @@ class MonitorCore(object):
                     factory.check_service()
                 else:
                     factory = GenCheckFactory(self.params, job, service)
-                    connector = reactor.connectTCP(job.get_ip(), service.get_port(), factory, self.params.get_timeout())
+                    connector = reactor.connectTCP(job.get_ip(),
+                                                   service.get_port(),
+                                                   factory,
+                                                   self.params.get_timeout())
                     deferred = factory.get_deferred(connector)
                     deferred.addCallback(self.gen_service_connect_pass, job, service)
                     deferred.addErrback(self.gen_service_connect_fail, job, service)
             else:
-                # todo - handle the error by reporting the problem with the job in the json
+                # TODO handle the error by reporting the problem with the job in the json
                 # and sending that back with the job report back.
-                service.fail_conn("Unknown service protocol %s/%s" % (service.get_port(), service.get_proto()))
+                service.fail_conn("Unknown service protocol %s/%s" % \
+                    (service.get_port(), service.get_proto()))
 
-    def gen_service_connect_pass(self, result, job, service):
+    @staticmethod
+    def gen_service_connect_pass(result, job, service):
         service.pass_conn()
         proto = service.get_proto()
         port = service.get_port()
         jobid = job.get_job_id()
         sys.stderr.write("Job %s:  Service %s/%s passed. %s\n" % (jobid, port, proto, result))
 
-    def gen_service_connect_fail(self, failure, job, service):
+    @staticmethod
+    def gen_service_connect_fail(failure, job, service):
         service.fail_conn(failure)
         proto = service.get_proto()
         port = service.get_port()
         jobid = job.get_job_id()
         sys.stderr.write("Job %s:  Service %s/%s failed:\n\t%s\n" % (jobid, port, proto, failure))
 
-def check_dir(dir):
+def check_dir(directory):
     try:
-        os.stat(dir)
+        os.stat(directory)
     except OSError as e:
         if e.errno == 2:
-            sys.stderr.write("No such directory %s, creating" % dir)
-            os.mkdir(dir)
+            sys.stderr.write("No such directory: %s Creating.\n" % directory)
+            os.mkdir(directory)
         else:
-            sys.stderr.write("Directory %s - Unknown error%s: %s" % (e.errno, e.strerror))
+            sys.stderr.write("Directory %s - Unknown error: %s" % (e.errno, e.strerror))
 
 
-if __name__=="__main__":
-    # Testing with an artificial job file
-    from Parameters import Parameters
-    from Jobs import Jobs
-
-    for dir in ("log", "raw", "sbe"):
-        check_dir(dir)
+def main():
+    for directory in ("log", "raw", "sbe"):
+        check_dir(directory)
     #log.startLogging(open('log/MonitorCore.log', 'w'))
     syslog.startLogging(prefix="Scorebot")
     params = Parameters()
@@ -225,3 +237,7 @@ if __name__=="__main__":
     reactor.callLater(10, mon_obj.start_job)
     reactor.callLater(1, mon_obj.finish_jobs)
     reactor.run()
+
+if __name__ == "__main__":
+    main()
+

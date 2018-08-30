@@ -1,10 +1,13 @@
 #!/usr/bin/env python2
-# requires:  https://pypi.python.org/pypi/http-parser
-from twisted.internet import reactor, protocol, ssl
+
+"""SMTPclient.py"""
+
+import sys
+import time
+
+from twisted.internet import reactor, protocol
 from twisted.internet.defer import Deferred
 from GenSocket import GenCoreFactory
-import time
-import sys
 
 
 class SMTPClient(protocol.Protocol):
@@ -18,12 +21,9 @@ class SMTPClient(protocol.Protocol):
         self.request = "HELO %s\n" % self.fqdn
         self.recv = ""
 
-    def no_unicode(self, text):
-        #sys.stderr.write("\nJob %s: Converting %s" % (self.job_id, text))
-        if isinstance(text, unicode):
-            return text.encode('utf-8')
-        else:
-            return text
+    @staticmethod
+    def no_unicode(text):
+        return text.encode("utf-8") if isinstance(text, unicode) else text
 
     def TimedOut(self):
         self.transport.loseConnection()
@@ -31,10 +31,11 @@ class SMTPClient(protocol.Protocol):
 
     def connectionMade(self):
         if self.job_id:
-            sys.stderr.write("Job %s: Made connection to %s:%s\n" % (self.job_id, self.factory.get_ip(), self.factory.get_port()))
+            sys.stderr.write("Job %s: Made connection to %s:%s\n" % \
+                (self.job_id, self.factory.get_ip(), self.factory.get_port()))
         else:
-            sys.stderr.write("Made connection to %s:%s\n" % (self.factory.get_ip(), self.factory.get_port()))
-        #sys.stderr.write("Sending: %s\n" % self.request)
+            sys.stderr.write("Made connection to %s:%s\n" % \
+                (self.factory.get_ip(), self.factory.get_port()))
 
     def dataReceived(self, data):
         data_len = len(data)
@@ -67,26 +68,31 @@ class SMTPFactory(GenCoreFactory):
         return SMTPClient(self)
 
     def check_service(self):
-        connector = reactor.connectTCP(self.job.get_ip(), self.service.get_port(), self, self.params.get_timeout())
+        connector = reactor.connectTCP(self.job.get_ip(),
+                                       self.service.get_port(),
+                                       self,
+                                       self.params.get_timeout())
         deferred = self.get_deferred(connector)
         deferred.addCallback(self.service_pass)
         deferred.addErrback(self.service_fail)
 
     def service_pass(self, reason):
         self.service.pass_conn()
-        sys.stdout.write("Job %s: Successfully checked SMTP connection for %s(%s)\n" % (self.job_id, self.fqdn, self.ip))
+        print "Job %s: Successfully checked SMTP connection for %s(%s)" % \
+            (self.job_id, self.fqdn, self.ip)
 
     def service_fail(self, failure):
         self.service.pass_conn(failure)
-        sys.stdout.write("Job %s: Failed check of SMTP connection for %s(%s)\n" % (self.job_id, self.fqdn, self.ip))
+        print "Job %s: Failed check of SMTP connection for %s(%s)" % \
+            (self.job_id, self.fqdn, self.ip)
 
     def clientConnectionFailed(self, connector, reason):
         self.end = time.time()
         if self.params.debug:
-            sys.stderr.write( "Job %s: clientConnectionFailed:\t" % self.job.get_job_id())
-            sys.stderr.write( "reason %s\t" % reason)
-            sys.stderr.write( "self.reason: %s\t" % self.reason)
-            sys.stderr.write( "\nReceived: %s\n" % self.get_server_headers())
+            sys.stderr.write("Job %s: clientConnectionFailed:\t" % self.job.get_job_id())
+            sys.stderr.write("reason %s\t" % reason)
+            sys.stderr.write("self.reason: %s\t" % self.reason)
+            sys.stderr.write("\nReceived: %s\n" % self.get_server_headers())
         conn_time = None
         if self.start:
             conn_time = self.end - self.start
@@ -98,10 +104,9 @@ class SMTPFactory(GenCoreFactory):
     def clientConnectionLost(self, connector, reason):
         self.end = time.time()
         if self.params.debug:
-            sys.stderr.write( "Job %s: clientConnectionLost\t" % self.job.get_job_id())
-            sys.stderr.write( "given reason: %s\t" % reason)
-            sys.stderr.write( "self.reason: %s\t" % self.reason)
-            #sys.stderr.write( "\nReceived: %s\n" % self.get_server_headers())
+            sys.stderr.write("Job %s: clientConnectionLost\t" % self.job.get_job_id())
+            sys.stderr.write("given reason: %s\t" % reason)
+            sys.stderr.write("self.reason: %s\t" % self.reason)
         if self.data:
             self.service.set_data(self.data)
         if self.fail and self.reason:
@@ -117,31 +122,3 @@ class SMTPFactory(GenCoreFactory):
             self.service.pass_conn()
             self.deferreds[connector].callback(self.job.get_job_id())
 
-if __name__=="__main__":
-    from Parameters import Parameters
-    from Jobs import Jobs
-    import json
-    from twisted.python import log
-    import sys
-    log.startLogging(open('log/smtptest.log', 'w'))
-    jobs = Jobs()
-    jobfile = open("test_smtpjob.txt")
-    sys.stderr.write( "Testing %s\n" % sys.argv[0])
-    params = Parameters()
-
-    def check_smtp(job):
-        print "Checking services for %s" % job.get_ip()
-        for service in job.get_services():
-            factory = SMTPFactory(params, job, service)
-            job.set_factory(factory)
-            factory.check_service()
-
-    jobs_raw = json.load(jobfile)
-    for job in jobs_raw:
-        jobs.add(json.dumps(job))
-        job = jobs.get_job()
-        check_smtp(job)
-
-    reactor.callLater(30, reactor.stop)
-    reactor.run()
-    print "Finished normally"
